@@ -1,0 +1,1205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Northstar's Noble Adventure</title>
+    <!-- Tone.js script removed -->
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #262626;
+            color: #d4d4d4;
+            font-family: 'Courier New', Courier, monospace;
+            user-select: none;
+        }
+
+        .game-wrapper {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.8);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        canvas {
+            background-color: #2d3e26; /* Darker grassy background */
+            display: block;
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .controls-hint {
+            position: absolute;
+            bottom: 10px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            color: #ccc;
+            text-shadow: 1px 1px 0 #000;
+            font-size: 0.9rem;
+            pointer-events: none;
+        }
+
+        .bar-container { margin-bottom: 0; }
+        .bar-label {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 2px;
+            color: #fff;
+            text-shadow: 1px 1px 0 #000;
+        }
+        .hp-bar-bg {
+            width: 200px;
+            height: 15px;
+            background-color: #444;
+            border: 22px solid #000;
+        }
+        .hp-bar-fill {
+            height: 100%;
+            background-color: #dc2626;
+            width: 100%;
+            transition: width 0.2s;
+        }
+        /* Talamasca's Bar Style */
+        .tal-bar-fill {
+            height: 100%;
+            background-color: #fbbf24; /* Gold */
+            width: 100%;
+            transition: width 0.2s;
+        }
+
+        .message-box {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: none; /* Controlled by JS on load */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+        }
+
+        .message-content { text-align: center; color: white; }
+        .message-content h1 { font-size: 3rem; margin-bottom: 1rem; color: #fca5a5; }
+
+        .btn {
+            background: #d97706;
+            border: 2px solid #fff;
+            color: white;
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .btn:hover { background: #b45309; }
+    </style>
+</head>
+<body>
+
+    <div class="game-wrapper">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <div class="ui-overlay">
+            <!-- Northstar HP -->
+            <div class="bar-container">
+                <div class="bar-label">Northstar</div>
+                <div class="hp-bar-bg"><div id="playerHpBar" class="hp-bar-fill"></div></div>
+            </div>
+            <!-- Talamasca HP -->
+            <div class="bar-container">
+                <div class="bar-label">Talamasca</div>
+                <div class="hp-bar-bg"><div id="talamascaHpBar" class="tal-bar-fill"></div></div>
+            </div>
+            <!-- Wave Info -->
+            <div class="bar-container" style="margin-top: 10px;">
+                <div class="bar-label" id="waveLabel">WAVE 1</div>
+            </div>
+        </div>
+
+        <div class="controls-hint">
+            Move: <b>Arrows</b> | Attack: <b>Space</b> | Block: <b>Shift</b> | Grapple: <b>E</b>
+        </div>
+
+        <div id="messageBox" class="message-box">
+            <div class="message-content">
+                <h1 id="msgTitle">Northstar's Noble Adventure</h1>
+                <p id="msgScore" style="font-size: 1.5rem; margin-bottom: 20px;">Press START to face the Orc Hordes.</p>
+                <button id="restartBtn" class="btn">START GAME</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Setup ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        const playerHpBar = document.getElementById('playerHpBar');
+        const talamascaHpBar = document.getElementById('talamascaHpBar');
+        const waveLabel = document.getElementById('waveLabel');
+        const messageBox = document.getElementById('messageBox');
+        const msgTitle = document.getElementById('msgTitle');
+        const msgScore = document.getElementById('msgScore');
+        const restartBtn = document.getElementById('restartBtn');
+
+        // --- Game Constants ---
+        const PLAYER_SPEED = 200;
+        const PLAYER_SIZE = 25; 
+        const SWORD_RANGE = 90;
+        const SWORD_ARC = Math.PI / 1.5; 
+        const ATTACK_DURATION = 0.2; 
+        const ATTACK_COOLDOWN = 0.4;
+        const PLAYER_HEAL_AMOUNT = 30; // Health Potion
+
+        // Talamasca Stats (OP)
+        const TAL_SPEED = 300; 
+        const TAL_DAGGER_RANGE = 90;
+        const TAL_ATTACK_DUR = 0.1;
+        const TAL_ATTACK_CD = 0.2; 
+        const TAL_DAMAGE = 15;
+
+        const ENEMY_SPEED = 80;
+        const ENEMY_SIZE = 20; 
+        const ENEMY_DMG = 5;
+        const KNOCKBACK_FORCE = 600;
+        
+        const GRAPPLE_SPEED = 800;
+        const GRAPPLE_RANGE = 400;
+        
+        // Power-up Constants
+        const POWERUP_DROP_CHANCE = 0.15; // 15% chance
+        const POWERUP_DURATION = 10; // seconds for damage boost
+        const POWERUP_SIZE = 15;
+        
+        // Boss Constants
+        const WARLORD_SIZE = 40;
+        const WARLORD_HP_MULTIPLIER = 10;
+        const WARLORD_DMG = 15;
+        const FIREBALL_SPEED = 300;
+        const FIREBALL_SIZE = 10;
+        const WARLORD_ATTACK_RATE = 4; // Boss attacks every 4 seconds
+
+        // --- Audio State ---
+        // ALL AUDIO VARS REMOVED FOR STABILITY
+        
+        // --- Game State ---
+        let lastTime = 0;
+        let isGameOver = false;
+        let isGameActive = false;
+        let wave = 1;
+        let keys = {};
+        let powerups = [];
+        let fireballs = [];
+        let warlordAttackTimer = WARLORD_ATTACK_RATE;
+
+        // --- Entities ---
+        
+        const player = {
+            x: 400, y: 300, radius: PLAYER_SIZE,
+            hp: 100, maxHp: 100, angle: 0, speedMultiplier: 1.0,
+            isAttacking: false, attackTimer: 0, attackCooldownTimer: 0, isBlocking: false,
+            
+            damageBoostTimer: 0, originalDamage: 20, currentDamage: 20,
+            
+            grapple: {
+                active: false, state: 'idle', x: 0, y: 0, startX: 0, startY: 0,
+                vx: 0, vy: 0, target: null, ropeLength: 0, idealAngle: 0
+            },
+            color: '#ffdbac', swordColor: '#e5e7eb'
+        };
+
+        const talamasca = {
+            x: 350, y: 300, radius: PLAYER_SIZE, angle: 0, speedMultiplier: 1.0,
+            hp: 50, maxHp: 50, dead: false,
+            isAttacking: false, attackTimer: 0, attackCooldownTimer: 0,
+            color: '#ffdbac', hairColor: '#ffd700'
+        };
+
+        let enemies = [];
+        let particles = [];
+        
+        // --- Environment ---
+        let environment = [];
+
+        function generateEnvironment() {
+            environment = [];
+            const count = 15;
+            
+            for(let i=0; i<count; i++) {
+                const typeRand = Math.random();
+                let type = 'tree';
+                let radius = 30;
+                
+                if (typeRand < 0.33) {
+                    type = 'rock'; radius = 25;
+                } else if (typeRand < 0.66) {
+                    type = 'bush'; radius = 25;
+                } else {
+                    type = 'tree'; radius = 20;
+                }
+
+                let x, y, dist;
+                do {
+                    x = Math.random() * (canvas.width - 100) + 50;
+                    y = Math.random() * (canvas.height - 100) + 50;
+                    dist = Math.sqrt((x - 400)**2 + (y - 300)**2);
+                } while (dist < 150);
+
+                environment.push({
+                    type: type, x: x, y: y, radius: radius,
+                    visualRadius: type === 'tree' ? 60 : radius
+                });
+            }
+        }
+
+        // --- Input Handling ---
+        window.addEventListener('keydown', e => {
+            keys[e.code] = true;
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyE'].includes(e.code)) {
+                e.preventDefault();
+            }
+            if (e.code === 'KeyE') toggleGrapple();
+        });
+        window.addEventListener('keyup', e => keys[e.code] = false);
+        restartBtn.addEventListener('click', resetGame); // Use the button to start/restart
+
+        // --- Helper Functions ---
+        function getDistance(e1, e2) {
+            return Math.sqrt((e1.x - e2.x)**2 + (e1.y - e2.y)**2);
+        }
+
+        function dropPowerup(x, y) {
+            if (Math.random() < POWERUP_DROP_CHANCE) {
+                const typeRand = Math.random();
+                let type = 'health';
+                if (typeRand < 0.5) {
+                    type = 'damage';
+                }
+                powerups.push({ x, y, type, radius: POWERUP_SIZE });
+            }
+        }
+
+        // --- Spawning Logic ---
+        function spawnWave() {
+            waveLabel.textContent = `WAVE ${wave}`;
+            const count = 2 + Math.floor(wave * 1.5);
+            
+            const getSpawnPos = () => {
+                let ex, ey;
+                if (Math.random() < 0.5) {
+                    ex = Math.random() < 0.5 ? -50 : canvas.width + 50;
+                    ey = Math.random() * canvas.height;
+                } else {
+                    ex = Math.random() * canvas.width;
+                    ey = Math.random() < 0.5 ? -50 : canvas.height + 50;
+                }
+                return {x: ex, y: ey};
+            };
+
+            // Spawn Regular Orcs
+            for(let i=0; i<count; i++) {
+                const pos = getSpawnPos();
+                enemies.push({
+                    x: pos.x, y: pos.y, radius: ENEMY_SIZE,
+                    hp: 30 + (wave * 5), maxHp: 30 + (wave * 5),
+                    vx: 0, vy: 0, knockbackX: 0, knockbackY: 0,
+                    color: '#ef4444', speedMultiplier: 1.0, baseSpeed: ENEMY_SPEED,
+                    isBoss: false
+                });
+            }
+
+            // Spawn Warlord Boss (Every 10 waves)
+            if (wave % 10 === 0) {
+                const pos = getSpawnPos();
+                enemies.push({
+                    x: pos.x, y: pos.y, radius: WARLORD_SIZE,
+                    hp: (30 + (wave * 5)) * WARLORD_HP_MULTIPLIER, 
+                    maxHp: (30 + (wave * 5)) * WARLORD_HP_MULTIPLIER,
+                    vx: 0, vy: 0, knockbackX: 0, knockbackY: 0,
+                    color: '#8b0000', baseSpeed: ENEMY_SPEED * 0.4,
+                    isBoss: true
+                });
+            }
+            // Spawn Tank Orc (Every 5 waves, excluding 10)
+            else if (wave % 5 === 0) {
+                const pos = getSpawnPos();
+                enemies.push({
+                    x: pos.x, y: pos.y, radius: ENEMY_SIZE * 2, 
+                    hp: (30 + (wave * 5)) * 5, 
+                    maxHp: (30 + (wave * 5)) * 5,
+                    vx: 0, vy: 0, knockbackX: 0, knockbackY: 0,
+                    color: '#7f1d1d', speedMultiplier: 1.0, baseSpeed: ENEMY_SPEED * 0.5, 
+                    isBoss: false
+                });
+            }
+        }
+
+        function createParticle(x, y, color) {
+            particles.push({
+                x, y,
+                vx: (Math.random() - 0.5) * 200, vy: (Math.random() - 0.5) * 200,
+                life: 0.5, color
+            });
+        }
+
+        // --- Physics & Interaction ---
+        
+        function resolveEnvironmentCollisions(entity) {
+            entity.speedMultiplier = 1.0;
+
+            environment.forEach(obj => {
+                const dist = getDistance(entity, obj);
+                
+                if (obj.type === 'bush') {
+                    if (dist < obj.radius + entity.radius) {
+                        entity.speedMultiplier = 0.5;
+                    }
+                } else {
+                    if (dist < obj.radius + entity.radius) {
+                        const overlap = (obj.radius + entity.radius) - dist;
+                        const angle = Math.atan2(entity.y - obj.y, entity.x - obj.x);
+                        
+                        entity.x += Math.cos(angle) * overlap;
+                        entity.y += Math.sin(angle) * overlap;
+                    }
+                }
+            });
+        }
+
+        function toggleGrapple() {
+            if (player.grapple.state === 'idle') {
+                player.grapple.active = true;
+                player.grapple.state = 'firing';
+                player.grapple.x = player.x;
+                player.grapple.y = player.y;
+                player.grapple.startX = player.x;
+                player.grapple.startY = player.y;
+                player.grapple.vx = Math.cos(player.angle) * GRAPPLE_SPEED;
+                player.grapple.vy = Math.sin(player.angle) * GRAPPLE_SPEED;
+                player.grapple.target = null;
+            } else {
+                player.grapple.state = 'idle';
+                player.grapple.active = false;
+                player.grapple.target = null;
+            }
+        }
+        
+        function shootFireball(boss) {
+            // Audio call removed
+            
+            let target = player;
+            if (!talamasca.dead) {
+                if (getDistance(boss, talamasca) < getDistance(boss, player)) target = talamasca;
+            }
+            
+            const angle = Math.atan2(target.y - boss.y, target.x - boss.x);
+
+            fireballs.push({
+                x: boss.x, y: boss.y, radius: FIREBALL_SIZE,
+                vx: Math.cos(angle) * FIREBALL_SPEED, vy: Math.sin(angle) * FIREBALL_SPEED,
+                damage: WARLORD_DMG
+            });
+        }
+
+        function updateTalamasca(dt) {
+            if (talamasca.dead) return;
+            
+            let target = null;
+            let minDist = Infinity;
+            
+            enemies.forEach(e => {
+                const d = getDistance(talamasca, e);
+                if (d < minDist) {
+                    minDist = d;
+                    target = e;
+                }
+            });
+
+            let moveX = 0;
+            let moveY = 0;
+            
+            if (target) {
+                const angle = Math.atan2(target.y - talamasca.y, target.x - talamasca.x);
+                talamasca.angle = angle;
+                
+                if (minDist > TAL_DAGGER_RANGE - 10) {
+                    moveX = Math.cos(angle);
+                    moveY = Math.sin(angle);
+                }
+            } else {
+                const distToPlayer = getDistance(talamasca, player);
+                if (distToPlayer > 80) {
+                    const angle = Math.atan2(player.y - talamasca.y, player.x - talamasca.x);
+                    talamasca.angle = angle;
+                    moveX = Math.cos(angle);
+                    moveY = Math.sin(angle);
+                }
+            }
+
+            resolveEnvironmentCollisions(talamasca);
+            let speed = TAL_SPEED * talamasca.speedMultiplier;
+            talamasca.x += moveX * speed * dt;
+            talamasca.y += moveY * speed * dt;
+
+            talamasca.x = Math.max(talamasca.radius, Math.min(canvas.width - talamasca.radius, talamasca.x));
+            talamasca.y = Math.max(talamasca.radius, Math.min(canvas.height - talamasca.radius, talamasca.y));
+
+            if (talamasca.attackCooldownTimer > 0) talamasca.attackCooldownTimer -= dt;
+
+            if (target && minDist < TAL_DAGGER_RANGE + target.radius + 10 && talamasca.attackCooldownTimer <= 0) {
+                talamasca.isAttacking = true;
+                talamasca.attackTimer = TAL_ATTACK_DUR;
+                talamasca.attackCooldownTimer = TAL_ATTACK_CD;
+
+                if (minDist < TAL_DAGGER_RANGE + target.radius) {
+                     target.hp -= TAL_DAMAGE;
+                     createParticle(target.x, target.y, '#fff');
+                     
+                     const angle = Math.atan2(target.y - talamasca.y, target.x - talamasca.x);
+                     target.knockbackX += Math.cos(angle) * 100;
+                     target.knockbackY += Math.sin(angle) * 100;
+                     
+                     if (target.hp <= 0) {
+                        dropPowerup(target.x, target.y);
+                        enemies = enemies.filter(e => e !== target);
+                        createParticle(target.x, target.y, '#ef4444');
+                     }
+                }
+            }
+
+            if (talamasca.isAttacking) {
+                talamasca.attackTimer -= dt;
+                if (talamasca.attackTimer <= 0) talamasca.isAttacking = false;
+            }
+        }
+
+        function update(dt) {
+            if (isGameOver || !isGameActive) return; // Only update if game is active
+
+            // Update AI Ally
+            updateTalamasca(dt);
+
+            // 0. Power-up Timer Update
+            if (player.damageBoostTimer > 0) {
+                player.damageBoostTimer -= dt;
+                player.currentDamage = player.originalDamage * 2;
+                if (player.damageBoostTimer <= 0) {
+                    player.damageBoostTimer = 0;
+                    player.currentDamage = player.originalDamage;
+                }
+            }
+
+            // 1. Resolve Environment Physics for Player
+            resolveEnvironmentCollisions(player);
+
+            // 2. Player Movement
+            let dx = 0;
+            let dy = 0;
+
+            if (keys['ArrowUp']) dy -= 1;
+            if (keys['ArrowDown']) dy += 1;
+            if (keys['ArrowLeft']) dx -= 1;
+            if (keys['ArrowRight']) dx += 1;
+            
+            let prevAngle = player.angle;
+
+            if (dx !== 0 || dy !== 0) {
+                player.angle = Math.atan2(dy, dx);
+                const len = Math.sqrt(dx*dx + dy*dy);
+                dx /= len;
+                dy /= len;
+
+                let finalSpeed = PLAYER_SPEED * player.speedMultiplier;
+                if (player.isBlocking) finalSpeed *= 0.4;
+                
+                player.x += dx * finalSpeed * dt;
+                player.y += dy * finalSpeed * dt;
+            }
+            
+            let angleDiff = player.angle - prevAngle;
+            if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+            if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+            // Boundary Checks
+            player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+
+            // 3. Grapple Logic
+            if (player.grapple.state === 'firing') {
+                player.grapple.x += player.grapple.vx * dt;
+                player.grapple.y += player.grapple.vy * dt;
+
+                const dist = Math.sqrt((player.grapple.x - player.grapple.startX)**2 + (player.grapple.y - player.grapple.startY)**2);
+                if (dist > GRAPPLE_RANGE) {
+                    player.grapple.state = 'idle';
+                    player.grapple.active = false;
+                }
+                if (player.grapple.x < 0 || player.grapple.x > canvas.width || player.grapple.y < 0 || player.grapple.y > canvas.height) {
+                    player.grapple.state = 'idle';
+                    player.grapple.active = false;
+                }
+            } else if (player.grapple.state === 'attached') {
+                const t = player.grapple.target;
+                if (!enemies.includes(t)) {
+                    player.grapple.state = 'idle';
+                    player.grapple.active = false;
+                    player.grapple.target = null;
+                } else {
+                    player.grapple.idealAngle += angleDiff;
+                    
+                    const idealX = player.x + Math.cos(player.grapple.idealAngle) * player.grapple.ropeLength;
+                    const idealY = player.y + Math.sin(player.grapple.idealAngle) * player.grapple.ropeLength;
+                    
+                    const k = 5.0;
+                    const damp = 0.05;
+                    
+                    const forceX = (idealX - t.x) * k;
+                    const forceY = (idealY - t.y) * k;
+                    
+                    t.vx += forceX * dt;
+                    t.vy += forceY * dt;
+                    
+                    t.vx *= (1 - damp);
+                    t.vy *= (1 - damp);
+                    
+                    player.grapple.x = t.x;
+                    player.grapple.y = t.y;
+                }
+            }
+
+            // 4. Combat State
+            player.isBlocking = keys['ShiftLeft'] || keys['ShiftRight'];
+            if (player.attackCooldownTimer > 0) player.attackCooldownTimer -= dt;
+            
+            if (keys['Space'] && player.attackCooldownTimer <= 0 && !player.isBlocking && !player.isAttacking) {
+                player.isAttacking = true;
+                player.attackTimer = ATTACK_DURATION;
+                player.attackCooldownTimer = ATTACK_COOLDOWN;
+                checkAttackHits();
+            }
+
+            if (player.isAttacking) {
+                player.attackTimer -= dt;
+                if (player.attackTimer <= 0) player.isAttacking = false;
+            }
+            
+            // 5. Power-up Collection
+            for (let i = powerups.length - 1; i >= 0; i--) {
+                const p = powerups[i];
+                if (getDistance(player, p) < player.radius + p.radius) {
+                    // Audio call removed
+
+                    if (p.type === 'health') {
+                        player.hp = Math.min(player.maxHp, player.hp + PLAYER_HEAL_AMOUNT);
+                        playerHpBar.style.width = `${(player.hp / player.maxHp) * 100}%`;
+                    } else if (p.type === 'damage') {
+                        player.damageBoostTimer = POWERUP_DURATION;
+                    }
+                    powerups.splice(i, 1);
+                }
+            }
+
+
+            // 6. Enemy Logic & Fireballs
+            if (enemies.length === 0) {
+                wave++;
+                spawnWave();
+            }
+
+            // Boss Attack Timer
+            if (wave % 10 === 0) {
+                 warlordAttackTimer -= dt;
+                 if (warlordAttackTimer <= 0) {
+                    enemies.filter(e => e.isBoss).forEach(boss => shootFireball(boss));
+                    warlordAttackTimer = WARLORD_ATTACK_RATE;
+                 }
+            }
+            
+            // Fireball Movement and Hero Collision
+            for (let i = fireballs.length - 1; i >= 0; i--) {
+                const f = fireballs[i];
+                f.x += f.vx * dt;
+                f.y += f.vy * dt;
+
+                let hitHero = null;
+                if (getDistance(f, player) < f.radius + player.radius) {
+                    hitHero = player;
+                } else if (!talamasca.dead && getDistance(f, talamasca) < f.radius + talamasca.radius) {
+                    hitHero = talamasca;
+                }
+
+                if (hitHero) {
+                    if (hitHero === player && player.isBlocking) {
+                        takeDamage(f.damage * 0.5); 
+                        createParticle(f.x, f.y, '#fbbf24');
+                    } else if (hitHero === player) {
+                        takeDamage(f.damage);
+                    } else if (hitHero === talamasca) {
+                        takeTalamascaDamage(f.damage);
+                    }
+                    fireballs.splice(i, 1);
+                }
+                
+                if (f.x < -100 || f.x > canvas.width + 100 || f.y < -100 || f.y > canvas.height + 100) {
+                    fireballs.splice(i, 1);
+                }
+            }
+
+
+            enemies.forEach((enemy, index) => {
+                resolveEnvironmentCollisions(enemy);
+
+                const isGrappled = (player.grapple.state === 'attached' && player.grapple.target === enemy);
+
+                if (isGrappled) {
+                    const angleToPlayer = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                    const struggleSpeed = (enemy.baseSpeed || ENEMY_SPEED) * 0.5 * enemy.speedMultiplier;
+                    enemy.vx += Math.cos(angleToPlayer) * struggleSpeed * dt * 2.0;
+                    enemy.vy += Math.sin(angleToPlayer) * struggleSpeed * dt * 2.0;
+
+                    enemy.x += enemy.vx * dt;
+                    enemy.y += enemy.vy * dt;
+
+                } else {
+                    enemy.x += enemy.knockbackX * dt;
+                    enemy.y += enemy.knockbackY * dt;
+                    enemy.knockbackX *= 0.9;
+                    enemy.knockbackY *= 0.9;
+
+                    const angleToPlayer = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                    
+                    if (Math.abs(enemy.knockbackX) < 10 && Math.abs(enemy.knockbackY) < 10) {
+                        const currentSpeed = (enemy.baseSpeed || ENEMY_SPEED) * enemy.speedMultiplier;
+                        enemy.x += Math.cos(angleToPlayer) * currentSpeed * dt;
+                        enemy.y += Math.sin(angleToPlayer) * currentSpeed * dt;
+                    }
+                }
+
+                enemy.x = Math.max(enemy.radius, Math.min(canvas.width - enemy.radius, enemy.x));
+                enemy.y = Math.max(enemy.radius, Math.min(canvas.height - enemy.radius, enemy.y));
+
+                // --- TARGETING COLLISION ---
+                let target = player;
+                if (!talamasca.dead) {
+                    const distToTal = getDistance(enemy, talamasca);
+                    const distToPlayer = getDistance(enemy, player);
+                    if (distToTal < distToPlayer) target = talamasca;
+                }
+
+                const dist = getDistance(target, enemy);
+                if (dist < target.radius + enemy.radius) {
+                    const angleToTarget = Math.atan2(target.y - enemy.y, target.x - enemy.x);
+                    
+                    if (target === player) {
+                        const angleToEnemy = Math.atan2(enemy.y - player.y, enemy.x - player.x);
+                        let angleDiff = angleToEnemy - player.angle;
+                        while (angleDiff > Math.PI) angleDiff -= Math.PI*2;
+                        while (angleDiff < -Math.PI) angleDiff += Math.PI*2;
+
+                        const isFacingEnemy = Math.abs(angleDiff) < Math.PI / 2;
+
+                        if (player.isBlocking && isFacingEnemy) {
+                            createParticle((player.x + enemy.x)/2, (player.y + enemy.y)/2, '#fbbf24');
+                            const pushX = -Math.cos(angleToTarget) * 100;
+                            const pushY = -Math.sin(angleToTarget) * 100;
+                            
+                            if (isGrappled) {
+                                enemy.vx += pushX * 2;
+                                enemy.vy += pushY * 2;
+                            } else {
+                                enemy.knockbackX = pushX;
+                                enemy.knockbackY = pushY;
+                            }
+                            // Audio call removed
+
+                        } else {
+                            takeDamage(ENEMY_DMG);
+                            player.x += Math.cos(angleToTarget) * 10;
+                            player.y += Math.sin(angleToTarget) * 10;
+                        }
+                    } else {
+                        takeTalamascaDamage(ENEMY_DMG);
+                        talamasca.x += Math.cos(angleToTarget) * 10;
+                        talamasca.y += Math.sin(angleToTarget) * 10;
+                    }
+                    
+                    const overlap = (target.radius + enemy.radius) - dist;
+                    enemy.x -= Math.cos(angleToTarget) * overlap;
+                    enemy.y -= Math.sin(angleToTarget) * overlap;
+                }
+            });
+
+            // 7. Particles
+            particles.forEach((p, i) => {
+                p.x += p.vx * dt; p.y += p.vy * dt;
+                p.life -= dt;
+                if(p.life <= 0) particles.splice(i, 1);
+            });
+        }
+
+        function checkAttackHits() {
+            enemies.forEach((enemy, index) => {
+                const dist = getDistance(player, enemy);
+                if (dist < SWORD_RANGE + enemy.radius) {
+                    const angleToEnemy = Math.atan2(enemy.y - player.y, enemy.x - player.x);
+                    let angleDiff = angleToEnemy - player.angle;
+                    while (angleDiff > Math.PI) angleDiff -= Math.PI*2;
+                    while (angleDiff < -Math.PI) angleDiff += Math.PI*2;
+
+                    if (Math.abs(angleDiff) < SWORD_ARC / 2) {
+                        enemy.hp -= player.currentDamage;
+                        createParticle(enemy.x, enemy.y, '#fff'); 
+                        
+                        // Audio call removed
+
+                        const kForceX = Math.cos(angleToEnemy) * KNOCKBACK_FORCE;
+                        const kForceY = Math.sin(angleToEnemy) * KNOCKBACK_FORCE;
+
+                        if (player.grapple.state === 'attached' && player.grapple.target === enemy) {
+                            enemy.vx += kForceX * 0.1;
+                            enemy.vy += kForceY * 0.1;
+                        } else {
+                            enemy.knockbackX = kForceX;
+                            enemy.knockbackY = kForceY;
+                        }
+
+                        if (enemy.hp <= 0) {
+                            dropPowerup(enemy.x, enemy.y);
+                            enemies.splice(index, 1);
+                            createParticle(enemy.x, enemy.y, '#ef4444'); 
+                        }
+                    }
+                }
+            });
+        }
+
+        function takeDamage(amount) {
+            // Audio lock logic removed
+
+            player.hp -= amount;
+            playerHpBar.style.width = `${(player.hp / player.maxHp) * 100}%`;
+            createParticle(player.x, player.y, '#dc2626');
+            if (player.hp <= 0) gameOver();
+        }
+
+        function takeTalamascaDamage(amount) {
+            // Audio lock logic removed
+            
+            talamasca.hp -= amount;
+            if (talamasca.hp < 0) talamasca.hp = 0;
+            talamascaHpBar.style.width = `${(talamasca.hp / talamasca.maxHp) * 100}%`;
+            
+            createParticle(talamasca.x, talamasca.y, '#dc2626');
+            
+            if (talamasca.hp <= 0) {
+                talamasca.dead = true;
+                talamascaHpBar.style.backgroundColor = '#555';
+            }
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            isGameActive = false; // Pause game on death
+            msgTitle.textContent = "YOU DIED";
+            msgScore.textContent = `You survived ${wave - 1} waves`;
+            restartBtn.textContent = "Try Again";
+            messageBox.style.display = 'flex';
+        }
+
+        function resetGame() {
+            // This function now serves as the START/RESTART button handler
+            
+            // Initialize game state (used for START and RESTART)
+            player.hp = player.maxHp;
+            player.x = canvas.width/2;
+            player.y = canvas.height/2;
+            playerHpBar.style.width = '100%';
+            player.grapple.state = 'idle';
+            player.grapple.active = false;
+            player.damageBoostTimer = 0;
+            player.currentDamage = player.originalDamage;
+
+            enemies = [];
+            particles = [];
+            powerups = [];
+            fireballs = [];
+            wave = 1;
+            isGameOver = false;
+            warlordAttackTimer = WARLORD_ATTACK_RATE;
+            
+            talamasca.hp = talamasca.maxHp;
+            talamasca.dead = false;
+            talamasca.x = player.x - 50;
+            talamasca.y = player.y;
+            talamascaHpBar.style.width = '100%';
+            talamascaHpBar.style.backgroundColor = '#fbbf24';
+
+            generateEnvironment();
+            spawnWave();
+
+            isGameActive = true; // Set game active!
+            messageBox.style.display = 'none';
+            
+            // Kick off the loop if it wasn't running (or just update lastTime if it was)
+            lastTime = performance.now();
+        }
+
+        // --- Drawing Logic ---
+
+        function draw() {
+            // Ground
+            ctx.fillStyle = '#2d3e26';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Grid
+            ctx.strokeStyle = '#3a4f32'; 
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for(let x=0; x<canvas.width; x+=50) { ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); }
+            for(let y=0; y<canvas.height; y+=50) { ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); }
+            ctx.stroke();
+
+            // Layer 1: Floor objects (Bushes)
+            environment.forEach(obj => {
+                if(obj.type === 'bush') {
+                    ctx.fillStyle = '#1e5c24'; 
+                    ctx.beginPath();
+                    ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI*2);
+                    ctx.fill();
+                    ctx.fillStyle = '#a8201a';
+                    ctx.beginPath(); ctx.arc(obj.x-5, obj.y-5, 3, 0, Math.PI*2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(obj.x+8, obj.y+2, 3, 0, Math.PI*2); ctx.fill();
+                }
+            });
+
+            // Layer 1.5: Powerups
+            powerups.forEach(p => {
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.beginPath();
+                ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
+                
+                if (p.type === 'health') {
+                    ctx.fillStyle = '#4ade80'; // Green
+                    ctx.fill();
+                    // Cross icon
+                    ctx.fillStyle = '#16a34a';
+                    ctx.fillRect(-3, -8, 6, 16);
+                    ctx.fillRect(-8, -3, 16, 6);
+                } else {
+                    ctx.fillStyle = '#a855f7'; // Purple
+                    ctx.fill();
+                    // Bolt icon
+                    ctx.fillStyle = '#ffffff';
+                    ctx.beginPath();
+                    ctx.moveTo(0, -7); ctx.lineTo(7, 3); ctx.lineTo(0, 3); ctx.lineTo(-7, 7); ctx.lineTo(0, -3); ctx.lineTo(-7, -3);
+                    ctx.fill();
+                }
+                ctx.restore();
+            });
+
+
+            // Layer 2: Entity Shadows
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            const entities = [player, ...enemies, ...environment];
+            if (!talamasca.dead) entities.push(talamasca);
+            
+            entities.forEach(obj => {
+                if (obj.type === 'bush' || obj.type === 'rock' || obj.type === 'tree') return;
+                ctx.beginPath();
+                const r = obj.visualRadius || obj.radius || 20;
+                ctx.ellipse(obj.x, obj.y + 5, r, r*0.6, 0, 0, Math.PI*2);
+                ctx.fill();
+            });
+
+            // Layer 3: Environment Solids (Tree Trunks, Rocks)
+            environment.forEach(obj => {
+                if (obj.type === 'rock') {
+                    ctx.fillStyle = '#57534e'; 
+                    ctx.beginPath();
+                    ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI*2);
+                    ctx.fill();
+                    ctx.fillStyle = '#78716c';
+                    ctx.beginPath();
+                    ctx.arc(obj.x - 5, obj.y - 5, obj.radius/2, 0, Math.PI*2);
+                    ctx.fill();
+                } else if (obj.type === 'tree') {
+                    ctx.fillStyle = '#3f2e21';
+                    ctx.beginPath();
+                    ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI*2);
+                    ctx.fill();
+                }
+            });
+            
+            // Layer 3.5: Fireballs
+            fireballs.forEach(f => {
+                ctx.fillStyle = '#f97316'; // Bright orange
+                ctx.beginPath();
+                ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Red glowing core
+                ctx.fillStyle = '#ef4444';
+                ctx.beginPath();
+                ctx.arc(f.x, f.y, f.radius * 0.5, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+
+            // Layer 4: Grapple Rope
+            if (player.grapple.active) {
+                ctx.beginPath();
+                ctx.moveTo(player.x, player.y);
+                ctx.lineTo(player.grapple.x, player.grapple.y);
+                ctx.strokeStyle = '#a3a3a3';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                
+                ctx.fillStyle = '#d4d4d4';
+                ctx.beginPath();
+                ctx.arc(player.grapple.x, player.grapple.y, 5, 0, Math.PI*2);
+                ctx.fill();
+            }
+
+            // Layer 5: Enemies
+            enemies.forEach(e => {
+                let target = player;
+                if (!talamasca.dead) {
+                    if (getDistance(e, talamasca) < getDistance(e, player)) target = talamasca;
+                }
+                const angle = Math.atan2(target.y - e.y, target.x - e.x);
+
+                ctx.save();
+                ctx.translate(e.x, e.y);
+                ctx.rotate(angle);
+                
+                const scale = e.radius / ENEMY_SIZE;
+                ctx.scale(scale, scale);
+
+                // Horns
+                ctx.fillStyle = '#fef3c7';
+                ctx.beginPath();
+                ctx.moveTo(5, -10); ctx.lineTo(18, -20); ctx.lineTo(12, -5); ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(5, 10); ctx.lineTo(18, 20); ctx.lineTo(12, 5); ctx.fill();
+
+                // Body
+                ctx.fillStyle = e.color;
+                ctx.beginPath();
+                ctx.arc(0, 0, ENEMY_SIZE, 0, Math.PI*2);
+                ctx.fill();
+                
+                // Eyes (Menacing yellow)
+                ctx.fillStyle = '#fbbf24';
+                ctx.beginPath(); ctx.arc(10, -6, 3, 0, Math.PI*2); ctx.fill();
+                ctx.beginPath(); ctx.arc(10, 6, 3, 0, Math.PI*2); ctx.fill();
+
+                ctx.restore();
+                
+                // Grapple Highlight
+                if (player.grapple.state === 'attached' && player.grapple.target === e) {
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(e.x, e.y, e.radius, 0, Math.PI*2);
+                    ctx.stroke();
+                }
+
+                // HP Bar
+                const barYOffset = e.radius + 15;
+                ctx.fillStyle = 'black';
+                ctx.fillRect(e.x - 15, e.y - barYOffset, 30, 5);
+                ctx.fillStyle = '#dc2626';
+                ctx.fillRect(e.x - 15, e.y - barYOffset, 30 * (e.hp/e.maxHp), 5);
+            });
+
+            // Layer 5.5: Talamasca
+            if (!talamasca.dead) {
+                ctx.save();
+                ctx.translate(talamasca.x, talamasca.y);
+                ctx.rotate(talamasca.angle);
+
+                // Sword (was Dagger)
+                if (talamasca.isAttacking) {
+                    ctx.save();
+                    const progress = 1 - (talamasca.attackTimer / TAL_ATTACK_DUR);
+                    ctx.translate(progress * 20, 0); 
+                    ctx.fillStyle = '#e2e8f0'; 
+                    ctx.fillRect(10, -3, TAL_DAGGER_RANGE, 6); 
+                    ctx.restore();
+                } else {
+                    ctx.fillStyle = '#94a3b8';
+                    ctx.fillRect(10, 10, 40, 4);
+                }
+
+                // Hair (Long, Gold, flowing behind)
+                ctx.fillStyle = talamasca.hairColor; 
+                ctx.beginPath();
+                ctx.ellipse(-15, 0, talamasca.radius * 1.5, talamasca.radius * 0.8, 0, 0, Math.PI*2);
+                ctx.fill();
+                
+                // Body Skin
+                ctx.fillStyle = talamasca.color;
+                ctx.beginPath();
+                ctx.arc(0, 0, talamasca.radius, 0, Math.PI*2);
+                ctx.fill();
+
+                // Hair Bangs (Covering top half)
+                ctx.fillStyle = talamasca.hairColor;
+                ctx.beginPath();
+                ctx.arc(2, 0, talamasca.radius + 1, -Math.PI/2 - 0.5, Math.PI/2 + 0.5, true); 
+                ctx.fill();
+
+                // Eyes (Bright blue)
+                ctx.fillStyle = '#3b82f6';
+                ctx.fillRect(10, -3, 5, 5); 
+                ctx.fillRect(10, 3, 5, 5); 
+                
+                ctx.restore();
+            }
+
+            // Layer 6: Player
+            ctx.save();
+            ctx.translate(player.x, player.y);
+            ctx.rotate(player.angle);
+            
+            // Damage Boost Indicator (Visual aura)
+            if (player.damageBoostTimer > 0) {
+                 ctx.fillStyle = `rgba(168, 85, 247, ${0.4 + 0.2 * Math.sin(performance.now() / 100)})`; // Flashing purple
+                 ctx.beginPath();
+                 ctx.arc(0, 0, player.radius + 15, 0, Math.PI * 2);
+                 ctx.fill();
+                 
+                 // Show timer
+                 const remaining = player.damageBoostTimer.toFixed(1);
+                 ctx.fillStyle = '#fff';
+                 ctx.font = '14px Courier New';
+                 ctx.fillText(remaining, -10, -player.radius - 20);
+            }
+
+
+            if (player.isAttacking) {
+                ctx.save();
+                const progress = 1 - (player.attackTimer / ATTACK_DURATION);
+                const swingAngle = -Math.PI/3 + (progress * Math.PI * 2/3);
+                ctx.rotate(swingAngle);
+                ctx.fillStyle = player.damageBoostTimer > 0 ? '#ffcc00' : '#cbd5e1'; // Gold sword when boosted
+                ctx.fillRect(0, -5, SWORD_RANGE, 10);
+                ctx.restore();
+            } else {
+                ctx.fillStyle = '#94a3b8';
+                ctx.fillRect(0, 15, 30, 5);
+            }
+
+            if (player.isBlocking) {
+                ctx.beginPath();
+                ctx.arc(0, 0, player.radius + 10, -Math.PI/3, Math.PI/3);
+                ctx.strokeStyle = '#fbbf24';
+                ctx.lineWidth = 5;
+                ctx.stroke();
+                ctx.fillStyle = 'rgba(251, 191, 36, 0.3)';
+                ctx.fill();
+            }
+
+            // Hair (Lighter brown & Longer)
+            ctx.fillStyle = '#a0522d'; 
+            ctx.beginPath();
+            ctx.arc(-8, 0, player.radius * 0.9, 0, Math.PI*2); 
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(-2, 0, player.radius, 0, Math.PI*2);
+            ctx.fill();
+
+            ctx.fillStyle = player.color;
+            ctx.beginPath();
+            ctx.arc(3, 0, player.radius - 2, 0, Math.PI*2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#333';
+            ctx.fillRect(12, -8, 5, 5); 
+            ctx.fillRect(12, 3, 5, 5); 
+            ctx.restore();
+
+            // Layer 7: Environment Canopy (Tree Tops)
+            environment.forEach(obj => {
+                if (obj.type === 'tree') {
+                    ctx.fillStyle = 'rgba(34, 197, 94, 0.9)'; 
+                    ctx.beginPath();
+                    ctx.arc(obj.x, obj.y, obj.visualRadius, 0, Math.PI*2);
+                    ctx.fill();
+                    ctx.fillStyle = '#4ade80';
+                    ctx.beginPath();
+                    ctx.arc(obj.x - 10, obj.y - 10, obj.visualRadius/2, 0, Math.PI*2);
+                    ctx.fill();
+                }
+            });
+
+            // Layer 8: Particles
+            particles.forEach(p => {
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = p.life;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+            });
+        }
+
+        // --- Loop ---
+        function gameLoop(timestamp) {
+            const dt = (timestamp - lastTime) / 1000;
+            lastTime = timestamp;
+            update(dt);
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Init
+        window.onload = () => {
+            // FIX: Removed initAudio as all audio is now removed
+            
+            // 1. Set minimal initial entity state for draw() to run cleanly
+            player.x = canvas.width/2;
+            player.y = canvas.height/2;
+            talamasca.x = player.x - 50;
+            talamasca.y = player.y;
+            generateEnvironment(); 
+            
+            // 2. Set UI and pause state
+            playerHpBar.style.width = '100%';
+            talamascaHpBar.style.width = '100%';
+            waveLabel.textContent = 'WAVE 1';
+            
+            // Set initial message box content
+            msgTitle.textContent = "Northstar's Noble Adventure";
+            msgScore.textContent = "Press START to face the Orc Hordes.";
+            restartBtn.textContent = "START GAME"; 
+            
+            messageBox.style.display = 'flex'; // Show the START GAME screen
+            isGameActive = false; // Ensure game is paused
+            
+            lastTime = performance.now();
+            requestAnimationFrame(gameLoop);
+        };
+
+    </script>
+</body>
+</html>
