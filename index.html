@@ -91,6 +91,12 @@
             width: 100%;
             transition: width 0.2s;
         }
+        .clam-bar-fill {
+            height: 100%;
+            background-color: #14b8a6; /* Teal */
+            width: 100%;
+            transition: width 0.2s;
+        }
 
         /* Kill Count Style */
         .kill-count {
@@ -129,6 +135,9 @@
             text-transform: uppercase;
         }
         .btn:hover { background: #b45309; }
+        
+        /* Hidden initially */
+        #clamjumperUI { display: none; margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -149,18 +158,24 @@
                 </div>
             </div>
 
-            <!-- Right Group: Talamasca -->
-            <div class="ui-group" style="align-items: flex-end;"> <!-- Align to right -->
+            <!-- Right Group: Talamasca & Clamjumper -->
+            <div class="ui-group" style="align-items: flex-end;"> 
                 <div class="bar-container" style="text-align: right;">
                     <div class="bar-label">Talamasca</div>
                     <div class="hp-bar-bg"><div id="talamascaHpBar" class="tal-bar-fill"></div></div>
                     <div class="kill-count" id="talamascaKillCount">Orcs Slain: 0</div>
                 </div>
+                
+                <div class="bar-container" id="clamjumperUI" style="text-align: right;">
+                    <div class="bar-label">Clamjumper</div>
+                    <div class="hp-bar-bg"><div id="clamjumperHpBar" class="clam-bar-fill"></div></div>
+                    <div class="kill-count" id="clamjumperKillCount">Orcs Slain: 0</div>
+                </div>
             </div>
         </div>
 
         <div class="controls-hint">
-            Move: <b>Arrows/WASD</b> | Attack: <b>Space/Click</b> | Block: <b>Alt</b>
+            Move: <b>Arrows/WASD</b> | Attack: <b>Space/Click</b> | Block: <b>Shift/Right Click</b>
         </div>
 
         <div id="messageBox" class="message-box">
@@ -179,8 +194,13 @@
         
         const playerHpBar = document.getElementById('playerHpBar');
         const talamascaHpBar = document.getElementById('talamascaHpBar');
+        const clamjumperHpBar = document.getElementById('clamjumperHpBar');
+        const clamjumperUI = document.getElementById('clamjumperUI');
+        
         const playerKillCountEl = document.getElementById('playerKillCount');
         const talamascaKillCountEl = document.getElementById('talamascaKillCount');
+        const clamjumperKillCountEl = document.getElementById('clamjumperKillCount');
+        
         const waveLabel = document.getElementById('waveLabel');
         const messageBox = document.getElementById('messageBox');
         const msgTitle = document.getElementById('msgTitle');
@@ -201,6 +221,14 @@
         const TAL_ATTACK_DUR = 0.1;
         const TAL_ATTACK_CD = 0.2; 
         const TAL_DAMAGE = 15;
+        
+        // Clamjumper Stats
+        const CLAM_SPEED = 120; // Slower than Northstar (200)
+        const CLAM_SWORD_RANGE = 110; // Slightly longer than 90
+        const CLAM_ATTACK_DUR = 0.5; // Slow heavy swing
+        const CLAM_ATTACK_CD = 1.0; 
+        const CLAM_DAMAGE = 25; 
+        const CLAM_SPAWN_CHANCE = 0.01; // 1% per round
 
         const ENEMY_SPEED = 80;
         const ENEMY_SIZE = 20; 
@@ -214,7 +242,7 @@
         const POWERUP_DURATION = 10;
         
         // Axe Weapon Stats
-        const AXE_EPIC_CHANCE = 0.0005; // 0.05% - Very Rare!
+        const AXE_EPIC_CHANCE = 0.0005; // 0.05%
         const AXE_RARE_CHANCE = 0.002;  // 0.2%
         const AXE_NORMAL_CHANCE = 0.005; // 0.5%
         
@@ -242,6 +270,7 @@
         let wave = 1;
         let keys = {};
         let mousePressed = false;
+        let rightMousePressed = false;
         let powerups = [];
         let fireballs = [];
         let warlordAttackTimer = WARLORD_ATTACK_RATE;
@@ -273,10 +302,18 @@
             isAttacking: false, attackTimer: 0, attackCooldownTimer: 0,
             kills: 0,
             color: '#ffdbac', hairColor: '#ffd700',
-            
-            // Undead Scaling
-            reviveCount: 0,
-            isSkeletal: false
+            reviveCount: 0, isSkeletal: false
+        };
+        
+        const clamjumper = {
+            active: false,
+            hasJoined: false, // New flag to track if he entered combat
+            x: 300, y: 300, radius: PLAYER_SIZE, angle: 0, speedMultiplier: 1.0,
+            hp: 80, maxHp: 80, dead: false,
+            isAttacking: false, attackTimer: 0, attackCooldownTimer: 0,
+            kills: 0,
+            color: '#0d9488', // Teal body
+            moveTimer: 0, moveAngle: 0
         };
 
         let enemies = [];
@@ -308,8 +345,7 @@
         // --- Input Handling ---
         window.addEventListener('keydown', e => {
             keys[e.code] = true;
-            // Prevent default for movement keys and Alt (Block)
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'AltLeft', 'AltRight'].includes(e.code)) {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight'].includes(e.code)) {
                 e.preventDefault();
             }
         });
@@ -317,11 +353,13 @@
         
         canvas.addEventListener('mousedown', e => {
             if (e.button === 0) mousePressed = true;
+            if (e.button === 2) rightMousePressed = true;
         });
         window.addEventListener('mouseup', e => {
             if (e.button === 0) mousePressed = false;
+            if (e.button === 2) rightMousePressed = false;
         });
-
+        canvas.addEventListener('contextmenu', e => e.preventDefault());
         restartBtn.addEventListener('click', resetGame);
 
         // --- Helper Functions ---
@@ -332,27 +370,15 @@
         function handleLootDrop(x, y) {
             const rand = Math.random();
             
-            // 1. Check Revive Token (Angel Wings) - Only if Talamasca is dead
             if (talamasca.dead && Math.random() < REVIVE_TOKEN_CHANCE) {
                 powerups.push({ x, y, type: 'revive', radius: POWERUP_SIZE, life: 30 });
-                return; // Priority drop
+                return; 
             }
             
-            // 2. Waterfall check: Axe
-            if (rand < AXE_EPIC_CHANCE) {
-                powerups.push({ x, y, type: 'axe', tier: 3, radius: POWERUP_SIZE, life: 30 }); 
-                return;
-            }
-            if (rand < AXE_RARE_CHANCE) {
-                powerups.push({ x, y, type: 'axe', tier: 2, radius: POWERUP_SIZE, life: 30 });
-                return;
-            }
-            if (rand < AXE_NORMAL_CHANCE) {
-                powerups.push({ x, y, type: 'axe', tier: 1, radius: POWERUP_SIZE, life: 30 });
-                return;
-            }
+            if (rand < AXE_EPIC_CHANCE) { powerups.push({ x, y, type: 'axe', tier: 3, radius: POWERUP_SIZE, life: 30 }); return; }
+            if (rand < AXE_RARE_CHANCE) { powerups.push({ x, y, type: 'axe', tier: 2, radius: POWERUP_SIZE, life: 30 }); return; }
+            if (rand < AXE_NORMAL_CHANCE) { powerups.push({ x, y, type: 'axe', tier: 1, radius: POWERUP_SIZE, life: 30 }); return; }
 
-            // 3. Normal Powerups (Health/Damage Boost)
             if (Math.random() < POWERUP_DROP_CHANCE) {
                 const typeRand = Math.random();
                 let type = (typeRand < 0.5) ? 'health' : 'damage';
@@ -363,20 +389,14 @@
         function updateKillUI() {
             playerKillCountEl.textContent = `Orcs Slain: ${player.kills}`;
             talamascaKillCountEl.textContent = `Orcs Slain: ${talamasca.kills}`;
+            clamjumperKillCountEl.textContent = `Orcs Slain: ${clamjumper.kills}`;
         }
         
         function recalculateStats() {
-            // Get stats based on current weapon tier
             const stats = WEAPON_STATS[player.weaponTier];
             let base = 20 * stats.dmgMult;
-            
-            // Multiplier from temporary boost
-            if (player.damageBoostTimer > 0) {
-                player.currentDamage = base * 2;
-            } else {
-                player.currentDamage = base;
-            }
-            
+            if (player.damageBoostTimer > 0) { player.currentDamage = base * 2; } 
+            else { player.currentDamage = base; }
             player.weaponRange = stats.range;
             player.weaponType = (player.weaponTier > 0) ? 'axe' : 'sword';
         }
@@ -384,6 +404,19 @@
         // --- Spawning Logic ---
         function spawnWave() {
             waveLabel.textContent = `WAVE ${wave}`;
+            
+            // Check for Clamjumper spawn
+            if (!clamjumper.active && Math.random() < CLAM_SPAWN_CHANCE) {
+                clamjumper.active = true;
+                clamjumper.hasJoined = true; // Mark as joined for game over screen
+                clamjumper.dead = false;
+                clamjumper.hp = clamjumper.maxHp;
+                // Spawn near player but not on top
+                clamjumper.x = player.x + (Math.random() < 0.5 ? -100 : 100);
+                clamjumper.y = player.y;
+                clamjumperUI.style.display = 'block';
+            }
+
             const count = 2 + Math.floor(wave * 1.5);
             const getSpawnPos = () => {
                 let ex, ey;
@@ -461,10 +494,8 @@
         function updateTalamasca(dt) {
             if (talamasca.dead) return;
             
-            // Calculate Stats based on Revive Count
             const currentRange = TAL_SWORD_RANGE * (1 + 0.25 * talamasca.reviveCount);
             const currentDamage = TAL_DAMAGE * (1 + 0.5 * talamasca.reviveCount);
-
             let target = null;
             let minDist = Infinity;
             enemies.forEach(e => {
@@ -504,7 +535,7 @@
                      target.knockbackX += Math.cos(angle) * 100;
                      target.knockbackY += Math.sin(angle) * 100;
                      if (target.hp <= 0) {
-                        talamasca.kills++; // Increment Kill Count
+                        talamasca.kills++; 
                         updateKillUI();
                         handleLootDrop(target.x, target.y);
                         enemies = enemies.filter(e => e !== target);
@@ -517,24 +548,86 @@
                 if (talamasca.attackTimer <= 0) talamasca.isAttacking = false;
             }
         }
+        
+        function updateClamjumper(dt) {
+            if (!clamjumper.active || clamjumper.dead) return;
+
+            // 1. Movement: Random Stumble
+            if (clamjumper.moveTimer <= 0) {
+                clamjumper.moveAngle = Math.random() * Math.PI * 2;
+                clamjumper.moveTimer = Math.random() * 1.5 + 0.5; // Change dir every 0.5 - 2s
+            }
+            clamjumper.moveTimer -= dt;
+            clamjumper.moveAngle += (Math.random() - 0.5) * 0.1;
+            
+            clamjumper.angle = clamjumper.moveAngle;
+
+            resolveEnvironmentCollisions(clamjumper);
+            const speed = CLAM_SPEED * clamjumper.speedMultiplier;
+            clamjumper.x += Math.cos(clamjumper.moveAngle) * speed * dt;
+            clamjumper.y += Math.sin(clamjumper.moveAngle) * speed * dt;
+
+            clamjumper.x = Math.max(clamjumper.radius, Math.min(canvas.width - clamjumper.radius, clamjumper.x));
+            clamjumper.y = Math.max(clamjumper.radius, Math.min(canvas.height - clamjumper.radius, clamjumper.y));
+
+            // 2. Combat: Mindless Swinging
+            if (clamjumper.attackCooldownTimer > 0) clamjumper.attackCooldownTimer -= dt;
+            
+            if (clamjumper.attackCooldownTimer <= 0 && !clamjumper.isAttacking) {
+                if (Math.random() < 0.05) { 
+                    clamjumper.isAttacking = true;
+                    clamjumper.attackTimer = CLAM_ATTACK_DUR;
+                    clamjumper.attackCooldownTimer = CLAM_ATTACK_CD;
+                    
+                    enemies.forEach((enemy, index) => {
+                         const dist = getDistance(clamjumper, enemy);
+                         if (dist < CLAM_SWORD_RANGE + enemy.radius) {
+                             const angleToEnemy = Math.atan2(enemy.y - clamjumper.y, enemy.x - clamjumper.x);
+                             let angleDiff = angleToEnemy - clamjumper.angle;
+                             while (angleDiff > Math.PI) angleDiff -= Math.PI*2;
+                             while (angleDiff < -Math.PI) angleDiff += Math.PI*2;
+                             
+                             if (Math.abs(angleDiff) < SWORD_ARC / 2) {
+                                 enemy.hp -= CLAM_DAMAGE;
+                                 createParticle(enemy.x, enemy.y, '#fff');
+                                 enemy.knockbackX += Math.cos(angleToEnemy) * KNOCKBACK_FORCE;
+                                 enemy.knockbackY += Math.sin(angleToEnemy) * KNOCKBACK_FORCE;
+                                 
+                                 if (enemy.hp <= 0) {
+                                    clamjumper.kills++; 
+                                    updateKillUI();
+                                    handleLootDrop(enemy.x, enemy.y);
+                                    enemy.dead = true; 
+                                    createParticle(enemy.x, enemy.y, '#ef4444');
+                                 }
+                             }
+                         }
+                    });
+                    enemies = enemies.filter(e => !e.dead);
+                }
+            }
+            
+            if (clamjumper.isAttacking) {
+                clamjumper.attackTimer -= dt;
+                if (clamjumper.attackTimer <= 0) clamjumper.isAttacking = false;
+            }
+        }
 
         function update(dt) {
             if (isGameOver || !isGameActive) return;
 
             updateTalamasca(dt);
+            updateClamjumper(dt);
 
             if (player.damageBoostTimer > 0) {
                 player.damageBoostTimer -= dt;
                 if (player.damageBoostTimer <= 0) { player.damageBoostTimer = 0; }
             }
-            // Recalculate stats every frame to ensure correct damage (axe/boost combo)
             recalculateStats();
-
 
             resolveEnvironmentCollisions(player);
 
             let dx = 0; let dy = 0;
-            // Updated Movement Logic to include WASD
             if (keys['ArrowUp'] || keys['KeyW']) dy -= 1;
             if (keys['ArrowDown'] || keys['KeyS']) dy += 1;
             if (keys['ArrowLeft'] || keys['KeyA']) dx -= 1;
@@ -553,12 +646,10 @@
             player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
             player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
 
-            // Updated Block Logic to use 'Alt'
-            player.isBlocking = keys['AltLeft'] || keys['AltRight'];
+            player.isBlocking = keys['ShiftLeft'] || keys['ShiftRight'] || rightMousePressed;
             
             if (player.attackCooldownTimer > 0) player.attackCooldownTimer -= dt;
             
-            // Updated Attack Logic to include Mouse Press
             if ((keys['Space'] || mousePressed) && player.attackCooldownTimer <= 0 && !player.isBlocking && !player.isAttacking) {
                 player.isAttacking = true;
                 player.attackTimer = ATTACK_DURATION;
@@ -586,22 +677,20 @@
                     } else if (p.type === 'damage') { 
                         player.damageBoostTimer = POWERUP_DURATION; 
                     } else if (p.type === 'axe') {
-                        // Check Tier Upgrade (Waterfall logic)
                         if (p.tier > player.weaponTier) {
                             player.weaponTier = p.tier;
                             recalculateStats();
                             createParticle(player.x, player.y, WEAPON_STATS[p.tier].color);
                         }
                     } else if (p.type === 'revive') {
-                        // Revive Talamasca
                         talamasca.dead = false;
                         talamasca.hp = talamasca.maxHp;
                         talamasca.reviveCount++;
                         talamasca.isSkeletal = true;
-                        talamasca.color = '#e5e5e5'; // Bone color
-                        talamascaHpBar.style.backgroundColor = '#fbbf24'; // Restore bar color
+                        talamasca.color = '#e5e5e5'; 
+                        talamascaHpBar.style.backgroundColor = '#fbbf24'; 
                         talamascaHpBar.style.width = '100%';
-                        createParticle(player.x, player.y, '#ffffff'); // White effect
+                        createParticle(player.x, player.y, '#ffffff'); 
                     }
                     powerups.splice(i, 1);
                 }
@@ -623,11 +712,13 @@
                 let hitHero = null;
                 if (getDistance(f, player) < f.radius + player.radius) hitHero = player;
                 else if (!talamasca.dead && getDistance(f, talamasca) < f.radius + talamasca.radius) hitHero = talamasca;
+                else if (clamjumper.active && !clamjumper.dead && getDistance(f, clamjumper) < f.radius + clamjumper.radius) hitHero = clamjumper;
 
                 if (hitHero) {
                     if (hitHero === player && player.isBlocking) { takeDamage(f.damage * 0.5); createParticle(f.x, f.y, '#fbbf24'); }
                     else if (hitHero === player) takeDamage(f.damage);
                     else if (hitHero === talamasca) takeTalamascaDamage(f.damage);
+                    else if (hitHero === clamjumper) takeClamjumperDamage(f.damage);
                     fireballs.splice(i, 1);
                 }
                 if (f.x < -100 || f.x > canvas.width + 100 || f.y < -100 || f.y > canvas.height + 100) fireballs.splice(i, 1);
@@ -641,8 +732,15 @@
                 enemy.knockbackY *= 0.9;
 
                 let targetHero = player;
+                let minDist = getDistance(enemy, player);
+                
                 if (!talamasca.dead) {
-                    if (getDistance(enemy, talamasca) < getDistance(enemy, player)) targetHero = talamasca;
+                    const d = getDistance(enemy, talamasca);
+                    if (d < minDist) { minDist = d; targetHero = talamasca; }
+                }
+                if (clamjumper.active && !clamjumper.dead) {
+                    const d = getDistance(enemy, clamjumper);
+                    if (d < minDist) { minDist = d; targetHero = clamjumper; }
                 }
 
                 if (Math.abs(enemy.knockbackX) < 10 && Math.abs(enemy.knockbackY) < 10) {
@@ -672,10 +770,14 @@
                             player.x += Math.cos(angleToTarget) * 10;
                             player.y += Math.sin(angleToTarget) * 10;
                         }
-                    } else {
+                    } else if (targetHero === talamasca) {
                         takeTalamascaDamage(ENEMY_DMG);
                         talamasca.x += Math.cos(angleToTarget) * 10;
                         talamasca.y += Math.sin(angleToTarget) * 10;
+                    } else if (targetHero === clamjumper) {
+                        takeClamjumperDamage(ENEMY_DMG);
+                        clamjumper.x += Math.cos(angleToTarget) * 10;
+                        clamjumper.y += Math.sin(angleToTarget) * 10;
                     }
                     const overlap = (targetHero.radius + enemy.radius) - dist;
                     enemy.x -= Math.cos(angleToTarget) * overlap;
@@ -689,7 +791,6 @@
         function checkAttackHits() {
             enemies.forEach((enemy, index) => {
                 const dist = getDistance(player, enemy);
-                // Use Dynamic Weapon Range
                 if (dist < player.weaponRange + enemy.radius) {
                     const angleToEnemy = Math.atan2(enemy.y - player.y, enemy.x - player.x);
                     let angleDiff = angleToEnemy - player.angle;
@@ -701,7 +802,7 @@
                         enemy.knockbackX = Math.cos(angleToEnemy) * KNOCKBACK_FORCE;
                         enemy.knockbackY = Math.sin(angleToEnemy) * KNOCKBACK_FORCE;
                         if (enemy.hp <= 0) { 
-                            player.kills++; // Increment Kill Count
+                            player.kills++; 
                             updateKillUI();
                             handleLootDrop(enemy.x, enemy.y); 
                             enemies.splice(index, 1); 
@@ -726,13 +827,30 @@
             createParticle(talamasca.x, talamasca.y, '#dc2626');
             if (talamasca.hp <= 0) { talamasca.dead = true; talamascaHpBar.style.backgroundColor = '#555'; }
         }
+        
+        function takeClamjumperDamage(amount) {
+            clamjumper.hp -= amount;
+            if (clamjumper.hp < 0) clamjumper.hp = 0;
+            clamjumperHpBar.style.width = `${(clamjumper.hp / clamjumper.maxHp) * 100}%`;
+            createParticle(clamjumper.x, clamjumper.y, '#dc2626');
+            if (clamjumper.hp <= 0) { 
+                clamjumper.dead = true; 
+                clamjumperHpBar.style.backgroundColor = '#555'; 
+            }
+        }
 
         function gameOver() {
             isGameOver = true; isGameActive = false;
             msgTitle.textContent = "YOU DIED";
-            msgScore.innerHTML = `You survived ${wave - 1} waves.<br><br>
+            let msgHTML = `You survived ${wave - 1} waves.<br><br>
                                   Northstar Kills: ${player.kills}<br>
                                   Talamasca Kills: ${talamasca.kills}`;
+            
+            if (clamjumper.hasJoined) {
+                msgHTML += `<br>Clamjumper Kills: ${clamjumper.kills}`;
+            }
+            
+            msgScore.innerHTML = msgHTML;
             restartBtn.textContent = "Try Again";
             messageBox.style.display = 'flex';
         }
@@ -741,23 +859,24 @@
             player.hp = player.maxHp; player.x = canvas.width/2; player.y = canvas.height/2;
             playerHpBar.style.width = '100%';
             player.damageBoostTimer = 0; player.currentDamage = player.originalDamage;
-            player.kills = 0; // Reset Kills
-            // Reset Weapon
-            player.weaponType = 'sword';
-            player.weaponRange = SWORD_RANGE;
-            player.weaponTier = 0;
+            player.kills = 0; 
+            player.weaponType = 'sword'; player.weaponRange = SWORD_RANGE; player.weaponTier = 0;
 
-            talamasca.kills = 0; // Reset Kills
-            talamasca.reviveCount = 0;
-            talamasca.isSkeletal = false;
-            talamasca.color = '#ffdbac';
-            updateKillUI(); // Update UI
+            talamasca.kills = 0; talamasca.reviveCount = 0; talamasca.isSkeletal = false; talamasca.color = '#ffdbac';
+            
+            clamjumper.kills = 0; clamjumper.active = false; clamjumper.dead = false; clamjumper.hasJoined = false; clamjumperUI.style.display = 'none';
+
+            updateKillUI(); 
 
             enemies = []; particles = []; powerups = []; fireballs = []; wave = 1; isGameOver = false;
             warlordAttackTimer = WARLORD_ATTACK_RATE;
+            
             talamasca.hp = talamasca.maxHp; talamasca.dead = false;
             talamasca.x = player.x - 50; talamasca.y = player.y;
             talamascaHpBar.style.width = '100%'; talamascaHpBar.style.backgroundColor = '#fbbf24';
+            
+            clamjumper.hp = clamjumper.maxHp; clamjumperHpBar.style.width = '100%'; clamjumperHpBar.style.backgroundColor = '#14b8a6';
+
             generateEnvironment(); spawnWave();
             isGameActive = true; messageBox.style.display = 'none';
             lastTime = performance.now();
@@ -766,6 +885,7 @@
         // --- Drawing Logic ---
 
         function draw() {
+            ctx.globalAlpha = 1.0; // FIX: Reset alpha at start of frame to prevent transparency bleeding
             ctx.fillStyle = '#2d3e26'; ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.strokeStyle = '#3a4f32'; ctx.lineWidth = 2; ctx.beginPath();
             for(let x=0; x<canvas.width; x+=50) { ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); }
@@ -782,40 +902,21 @@
 
             powerups.forEach(p => {
                 ctx.save(); ctx.translate(p.x, p.y); 
-                
-                // Blinking Effect
-                if (p.life < POWERUP_BLINK_TIME) {
-                    if (Math.floor(p.life * 5) % 2 === 0) ctx.globalAlpha = 0.3;
-                }
+                if (p.life < POWERUP_BLINK_TIME) { if (Math.floor(p.life * 5) % 2 === 0) ctx.globalAlpha = 0.3; }
 
                 ctx.beginPath(); ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
-                if (p.type === 'health') {
-                    ctx.fillStyle = '#4ade80'; ctx.fill(); ctx.fillStyle = '#16a34a'; ctx.fillRect(-3, -8, 6, 16); ctx.fillRect(-8, -3, 16, 6);
-                } else if (p.type === 'damage') {
-                    ctx.fillStyle = '#a855f7'; ctx.fill(); ctx.fillStyle = '#ffffff'; ctx.beginPath();
-                    ctx.moveTo(0, -7); ctx.lineTo(7, 3); ctx.lineTo(0, 3); ctx.lineTo(-7, 7); ctx.lineTo(0, -3); ctx.lineTo(-7, -3); ctx.fill();
-                } else if (p.type === 'axe') {
-                    // Color based on Tier
-                    ctx.fillStyle = WEAPON_STATS[p.tier].color; 
-                    ctx.fill(); 
-                    // Draw Axe Icon
-                    ctx.fillStyle = '#222';
-                    ctx.beginPath();
-                    ctx.moveTo(-5, 0); ctx.lineTo(5, 5); ctx.lineTo(5, -5); ctx.fill();
-                    ctx.fillRect(0, -8, 3, 16);
-                } else if (p.type === 'revive') {
-                    ctx.fillStyle = '#ffffff'; ctx.fill();
-                    // Draw Wings
-                    ctx.fillStyle = '#fbbf24'; // Gold
-                    ctx.beginPath(); ctx.ellipse(-6, -2, 8, 4, -0.5, 0, Math.PI*2); ctx.fill(); // Left wing
-                    ctx.beginPath(); ctx.ellipse(6, -2, 8, 4, 0.5, 0, Math.PI*2); ctx.fill(); // Right wing
-                    ctx.beginPath(); ctx.arc(0, 5, 2, 0, Math.PI*2); ctx.fill(); // Halo/Center
-                }
+                if (p.type === 'health') { ctx.fillStyle = '#4ade80'; ctx.fill(); ctx.fillStyle = '#16a34a'; ctx.fillRect(-3, -8, 6, 16); ctx.fillRect(-8, -3, 16, 6); } 
+                else if (p.type === 'damage') { ctx.fillStyle = '#a855f7'; ctx.fill(); ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(7, 3); ctx.lineTo(0, 3); ctx.lineTo(-7, 7); ctx.lineTo(0, -3); ctx.lineTo(-7, -3); ctx.fill(); } 
+                else if (p.type === 'axe') { ctx.fillStyle = WEAPON_STATS[p.tier].color; ctx.fill(); ctx.fillStyle = '#222'; ctx.beginPath(); ctx.moveTo(-5, 0); ctx.lineTo(5, 5); ctx.lineTo(5, -5); ctx.fill(); ctx.fillRect(0, -8, 3, 16); } 
+                else if (p.type === 'revive') { ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.fillStyle = '#fbbf24'; ctx.beginPath(); ctx.ellipse(-6, -2, 8, 4, -0.5, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.ellipse(6, -2, 8, 4, 0.5, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(0, 5, 2, 0, Math.PI*2); ctx.fill(); }
                 ctx.restore();
             });
 
             ctx.fillStyle = 'rgba(0,0,0,0.3)';
-            const entities = [player, ...enemies]; if (!talamasca.dead) entities.push(talamasca);
+            const entities = [player, ...enemies]; 
+            if (!talamasca.dead) entities.push(talamasca);
+            if (clamjumper.active && !clamjumper.dead) entities.push(clamjumper);
+            
             entities.forEach(obj => {
                 ctx.beginPath(); const r = obj.radius || 20; ctx.ellipse(obj.x, obj.y + 5, r, r*0.6, 0, 0, Math.PI*2); ctx.fill();
             });
@@ -831,7 +932,10 @@
             });
 
             enemies.forEach(e => {
-                let target = player; if (!talamasca.dead) { if (getDistance(e, talamasca) < getDistance(e, player)) target = talamasca; }
+                let target = player; 
+                if (!talamasca.dead && getDistance(e, talamasca) < getDistance(e, target)) target = talamasca;
+                if (clamjumper.active && !clamjumper.dead && getDistance(e, clamjumper) < getDistance(e, target)) target = clamjumper;
+                
                 const angle = Math.atan2(target.y - e.y, target.x - e.x);
                 ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(angle);
                 const scale = e.radius / ENEMY_SIZE; ctx.scale(scale, scale);
@@ -845,89 +949,65 @@
 
             if (!talamasca.dead) {
                 ctx.save(); ctx.translate(talamasca.x, talamasca.y); ctx.rotate(talamasca.angle);
+                if (talamasca.isAttacking) { ctx.save(); const progress = 1 - (talamasca.attackTimer / TAL_ATTACK_DUR); ctx.translate(progress * 20, 0); ctx.fillStyle = talamasca.isSkeletal ? '#52525b' : '#e2e8f0'; ctx.fillRect(10, -3, TAL_SWORD_RANGE * (1 + 0.25 * talamasca.reviveCount), talamasca.isSkeletal ? 4 : 6); if(talamasca.isSkeletal) { ctx.fillStyle = '#e2e8f0'; ctx.beginPath(); ctx.arc(10 + TAL_SWORD_RANGE * (1 + 0.25 * talamasca.reviveCount), -3, 20, Math.PI/2, Math.PI * 1.5); ctx.fill(); } ctx.restore(); }
+                else { ctx.fillStyle = '#94a3b8'; ctx.fillRect(10, 10, 40, 4); }
                 
-                // Weapon Logic (Sword vs Scythe)
-                const weaponRange = TAL_SWORD_RANGE * (1 + 0.25 * talamasca.reviveCount);
-                if (talamasca.isAttacking) { 
-                    ctx.save(); 
-                    const progress = 1 - (talamasca.attackTimer / TAL_ATTACK_DUR); 
-                    ctx.translate(progress * 20, 0); 
-                    
-                    if (talamasca.isSkeletal) {
-                         // Draw Scythe
-                         ctx.fillStyle = '#52525b'; // Dark handle
-                         ctx.fillRect(10, -3, weaponRange, 4); 
-                         ctx.fillStyle = '#e2e8f0'; // Blade
-                         ctx.beginPath();
-                         ctx.arc(10 + weaponRange, -3, 20, Math.PI/2, Math.PI * 1.5);
-                         ctx.fill();
-                    } else {
-                         // Draw Sword/Dagger
-                         ctx.fillStyle = '#e2e8f0'; 
-                         ctx.fillRect(10, -3, weaponRange, 6); 
-                    }
-                    ctx.restore(); 
-                }
-                else { 
-                    ctx.fillStyle = '#94a3b8'; 
-                    ctx.fillRect(10, 10, 40, 4); 
-                }
-
                 if (talamasca.isSkeletal) {
-                     // Skeletal Appearance
-                     ctx.fillStyle = talamasca.color; // Bone
-                     ctx.beginPath(); ctx.arc(0, 0, talamasca.radius, 0, Math.PI*2); ctx.fill();
-                     // Dark empty eyes
-                     ctx.fillStyle = '#111'; 
-                     ctx.beginPath(); ctx.arc(10, -5, 4, 0, Math.PI*2); ctx.fill();
-                     ctx.beginPath(); ctx.arc(10, 5, 4, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = talamasca.color; ctx.beginPath(); ctx.arc(0, 0, talamasca.radius, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(10, -5, 4, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(10, 5, 4, 0, Math.PI*2); ctx.fill();
                 } else {
-                     // Human Appearance
-                     ctx.fillStyle = talamasca.hairColor; ctx.beginPath(); ctx.ellipse(-15, 0, talamasca.radius * 1.5, talamasca.radius * 0.8, 0, 0, Math.PI*2); ctx.fill();
-                     ctx.fillStyle = talamasca.color; ctx.beginPath(); ctx.arc(0, 0, talamasca.radius, 0, Math.PI*2); ctx.fill();
-                     ctx.fillStyle = talamasca.hairColor; ctx.beginPath(); ctx.arc(2, 0, talamasca.radius + 1, -Math.PI/2 - 0.5, Math.PI/2 + 0.5, true); ctx.fill();
-                     ctx.fillStyle = '#3b82f6'; ctx.fillRect(10, -3, 5, 5); ctx.fillRect(10, 3, 5, 5); 
+                    ctx.fillStyle = talamasca.hairColor; ctx.beginPath(); ctx.ellipse(-15, 0, talamasca.radius * 1.5, talamasca.radius * 0.8, 0, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = talamasca.color; ctx.beginPath(); ctx.arc(0, 0, talamasca.radius, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = talamasca.hairColor; ctx.beginPath(); ctx.arc(2, 0, talamasca.radius + 1, -Math.PI/2 - 0.5, Math.PI/2 + 0.5, true); ctx.fill();
+                    ctx.fillStyle = '#3b82f6'; ctx.fillRect(10, -3, 5, 5); ctx.fillRect(10, 3, 5, 5); 
                 }
                 ctx.restore();
+            }
+            
+            if (clamjumper.active && !clamjumper.dead) {
+                 ctx.save(); ctx.translate(clamjumper.x, clamjumper.y); ctx.rotate(clamjumper.angle);
+                 if (clamjumper.isAttacking) {
+                     ctx.save(); const progress = 1 - (clamjumper.attackTimer / CLAM_ATTACK_DUR); ctx.translate(progress * 15, 0);
+                     ctx.fillStyle = '#94a3b8'; ctx.fillRect(10, -3, CLAM_SWORD_RANGE, 8); 
+                     ctx.restore();
+                 } else {
+                     ctx.fillStyle = '#64748b'; ctx.fillRect(10, 15, 40, 6);
+                 }
+                 
+                 // Body (Teal)
+                 ctx.fillStyle = clamjumper.color; ctx.beginPath(); ctx.arc(0, 0, clamjumper.radius, 0, Math.PI*2); ctx.fill();
+
+                 // Beanie (Red with White Stripes)
+                 ctx.fillStyle = '#ef4444'; // Red Cap
+                 ctx.beginPath(); ctx.arc(0, 0, clamjumper.radius, Math.PI, 0); ctx.fill();
+                 
+                 ctx.fillStyle = '#e5e7eb'; // White Stripes
+                 // Draw rects adjusted for circular clip or just over it
+                 ctx.fillRect(-clamjumper.radius + 2, -18, (clamjumper.radius * 2) - 4, 5);
+                 ctx.fillRect(-clamjumper.radius + 5, -8, (clamjumper.radius * 2) - 10, 5);
+                 
+                 // Pom-pom
+                 ctx.beginPath(); ctx.arc(0, -clamjumper.radius - 3, 5, 0, Math.PI*2); ctx.fill();
+
+                 // Eyes
+                 ctx.fillStyle = '#000'; ctx.fillRect(10, -5, 4, 4); ctx.fillRect(10, 5, 4, 4);
+                 
+                 ctx.restore();
             }
 
             ctx.save(); ctx.translate(player.x, player.y); ctx.rotate(player.angle);
             if (player.damageBoostTimer > 0) { ctx.fillStyle = `rgba(168, 85, 247, ${0.4 + 0.2 * Math.sin(performance.now() / 100)})`; ctx.beginPath(); ctx.arc(0, 0, player.radius + 15, 0, Math.PI * 2); ctx.fill(); const remaining = player.damageBoostTimer.toFixed(1); ctx.fillStyle = '#fff'; ctx.font = '14px Courier New'; ctx.fillText(remaining, -10, -player.radius - 20); }
             if (player.isAttacking) { 
                 ctx.save(); const progress = 1 - (player.attackTimer / ATTACK_DURATION); const swingAngle = -Math.PI/3 + (progress * Math.PI * 2/3); ctx.rotate(swingAngle); 
-                
-                // Color based on held weapon tier if boost is not active
-                if (player.damageBoostTimer > 0) {
-                     ctx.fillStyle = '#ffcc00';
-                } else {
-                     ctx.fillStyle = WEAPON_STATS[player.weaponTier].color;
-                }
-
-                if (player.weaponType === 'axe') {
-                    // Draw Axe
-                    ctx.fillRect(0, -3, player.weaponRange, 6); // Handle
-                    ctx.beginPath();
-                    ctx.moveTo(player.weaponRange - 10, -10);
-                    ctx.lineTo(player.weaponRange + 5, -20);
-                    ctx.lineTo(player.weaponRange + 5, 20);
-                    ctx.lineTo(player.weaponRange - 10, 10);
-                    ctx.fill();
-                } else {
-                    // Draw Sword
-                    ctx.fillRect(0, -5, SWORD_RANGE, 10);
-                }
+                if (player.damageBoostTimer > 0) { ctx.fillStyle = '#ffcc00'; } else { ctx.fillStyle = WEAPON_STATS[player.weaponTier].color; }
+                if (player.weaponType === 'axe') { ctx.fillRect(0, -3, player.weaponRange, 6); ctx.beginPath(); ctx.moveTo(player.weaponRange - 10, -10); ctx.lineTo(player.weaponRange + 5, -20); ctx.lineTo(player.weaponRange + 5, 20); ctx.lineTo(player.weaponRange - 10, 10); ctx.fill(); } 
+                else { ctx.fillRect(0, -5, SWORD_RANGE, 10); }
                 ctx.restore(); 
             }
             else { 
-                // Idle weapon color
                 ctx.fillStyle = WEAPON_STATS[player.weaponTier].color;
-                if (player.weaponTier === 0) ctx.fillStyle = '#94a3b8'; // Default sword color if tier 0
-
-                if (player.weaponType === 'axe') {
-                    ctx.fillRect(0, 15, 30, 4); // Axe Idle
-                } else {
-                    ctx.fillRect(0, 15, 30, 5); // Sword Idle
-                }
+                if (player.weaponTier === 0) ctx.fillStyle = '#94a3b8'; 
+                if (player.weaponType === 'axe') { ctx.fillRect(0, 15, 30, 4); } else { ctx.fillRect(0, 15, 30, 5); }
             }
             if (player.isBlocking) { ctx.beginPath(); ctx.arc(0, 0, player.radius + 10, -Math.PI/3, Math.PI/3); ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 5; ctx.stroke(); ctx.fillStyle = 'rgba(251, 191, 36, 0.3)'; ctx.fill(); }
             ctx.fillStyle = '#a0522d'; ctx.beginPath(); ctx.arc(-8, 0, player.radius * 0.9, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(-2, 0, player.radius, 0, Math.PI*2); ctx.fill();
